@@ -13,11 +13,14 @@ const DEFAULT_CONFIG = {
     requireEcc: true,
     cpuVendors: ["AMD"],
     maxPriceEur: 100,
-    minNvmeTb: 3,
+    minNvmeTb: 3.5,
   },
   storage: {
-    postedIdsFile: "posted_ids.json",
+    postedStateFile: "posted_state.json",
     historyDir: "history",
+  },
+  pricing: {
+    includeIpPrice: true,
   },
   polling: {
     intervalMs: 5000,
@@ -160,14 +163,26 @@ const matchesFilters = (server, filters) => {
   return ramOk && eccOk && cpuOk && nvmeOk;
 };
 
-const loadPostedIds = async (filePath) => {
-  const ids = await readJsonFile(filePath, []);
-  return new Set(ids.map((id) => String(id)));
+const normalizePostedState = (raw) => {
+  if (Array.isArray(raw)) {
+    return raw.reduce((state, id) => {
+      state[String(id)] = { lastPriceWithTax: null };
+      return state;
+    }, {});
+  }
+  if (raw && typeof raw === "object") {
+    return raw;
+  }
+  return {};
 };
 
-const savePostedIds = async (filePath, ids) => {
-  const list = Array.from(ids).sort();
-  await writeJsonFile(filePath, list);
+const loadPostedState = async (filePath) => {
+  const state = await readJsonFile(filePath, {});
+  return normalizePostedState(state);
+};
+
+const savePostedState = async (filePath, state) => {
+  await writeJsonFile(filePath, state);
 };
 
 const formatNvmeTb = (server) => {
@@ -179,14 +194,35 @@ const formatNvmeTb = (server) => {
   return `${totalTb.toFixed(2)} TB`;
 };
 
-const formatServerMessage = (server, previousData, taxPercent) => {
-  const ramLabel = `${server?.ram_size || "?"} GB${server?.is_ecc ? " ECC" : ""}`;
+const getBaseMonthlyPrice = (server, includeIpPrice) => {
+  const basePrice = Number(server?.price || 0);
+  const ipPrice = includeIpPrice ? Number(server?.ip_price?.Monthly || 0) : 0;
+  return basePrice + ipPrice;
+};
+
+const formatPriceWithTax = (basePrice, taxPercent) => {
   const taxValue = Number(taxPercent || 0);
-  const priceWithTax = Number(server?.price || 0) * (1 + taxValue / 100);
-  const priceDisplayLabel =
-    taxValue > 0
-      ? `${priceWithTax.toFixed(2)} € (incl. ${taxValue}% tax)`
-      : `${server?.price ?? "?"} €`;
+  const priceWithTax = basePrice * (1 + taxValue / 100);
+  return taxValue > 0
+    ? `${priceWithTax.toFixed(2)} € (incl. ${taxValue}% tax)`
+    : `${basePrice.toFixed(2)} €`;
+};
+
+const getPriceWithTaxValue = (basePrice, taxPercent) => {
+  const taxValue = Number(taxPercent || 0);
+  return basePrice * (1 + taxValue / 100);
+};
+
+const formatServerEmbed = (
+  server,
+  previousData,
+  taxPercent,
+  includeIpPrice,
+  isPriceUpdate,
+) => {
+  const ramLabel = `${server?.ram_size || "?"} GB${server?.is_ecc ? " ECC" : ""}`;
+  const basePrice = getBaseMonthlyPrice(server, includeIpPrice);
+  const priceDisplayLabel = formatPriceWithTax(basePrice, taxPercent);
   let previousPriceLine = null;
 
   if (previousData && Array.isArray(previousData.server)) {
@@ -198,25 +234,49 @@ const formatServerMessage = (server, previousData, taxPercent) => {
       previousServer.price !== undefined &&
       previousServer.price !== server?.price
     ) {
-      previousPriceLine = `**Previous Price:** ${previousServer.price} €`;
+      const previousBasePrice = getBaseMonthlyPrice(
+        previousServer,
+        includeIpPrice,
+      );
+      previousPriceLine = `**Previous Price:** ${formatPriceWithTax(previousBasePrice, taxPercent)}`;
     }
   }
 
-  return [
-    `**Hetzner Server Auction Match**`,
-    `**ID:** ${server?.id ?? "unknown"}`,
-    server?.id
-      ? `**Link:** https://www.hetzner.com/sb/#search=${server.id}`
-      : null,
-    `**CPU:** ${server?.cpu ?? "unknown"}`,
-    `**RAM:** ${ramLabel}`,
-    `**NVMe Total:** ${formatNvmeTb(server)}`,
-    `**Price:** ${priceDisplayLabel}`,
-    previousPriceLine,
-    `**Datacenter:** ${server?.datacenter_hr ?? server?.datacenter ?? "unknown"}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const title = isPriceUpdate ? "Price Update" : "New Match";
+  const serverId = server?.id ?? "unknown";
+  const url = server?.id
+    ? `https://www.hetzner.com/sb/#search=${server.id}`
+    : undefined;
+
+  const fields = [
+    { name: "ID", value: String(serverId), inline: true },
+    { name: "CPU", value: String(server?.cpu ?? "unknown"), inline: true },
+    { name: "RAM", value: ramLabel, inline: true },
+    { name: "NVMe Total", value: formatNvmeTb(server), inline: true },
+    { name: "Price", value: priceDisplayLabel, inline: true },
+    {
+      name: "Datacenter",
+      value: String(server?.datacenter_hr ?? server?.datacenter ?? "unknown"),
+      inline: true,
+    },
+  ];
+
+  if (previousPriceLine) {
+    fields.push({
+      name: "Previous Price",
+      value: previousPriceLine,
+      inline: true,
+    });
+  }
+
+  return {
+    title,
+    url,
+    color: isPriceUpdate ? 0xffc107 : 0x2f3136,
+    fields,
+    footer: { text: "Hetzner Server Auction" },
+    timestamp: new Date().toISOString(),
+  };
 };
 
 const postToDiscord = async (webhookUrl, payload) => {
@@ -241,9 +301,9 @@ const createPoller = (config) => {
     ROOT_DIR,
     config.storage?.historyDir || "history",
   );
-  const postedIdsPath = path.join(
+  const postedStatePath = path.join(
     ROOT_DIR,
-    config.storage?.postedIdsFile || "posted_ids.json",
+    config.storage?.postedStateFile || "posted_state.json",
   );
   let isRunning = false;
 
@@ -258,38 +318,60 @@ const createPoller = (config) => {
       await saveHistorySnapshot(historyDir, data);
 
       const servers = Array.isArray(data?.server) ? data.server : [];
+      const includeIpPrice = config.pricing?.includeIpPrice !== false;
       const matches = servers.filter((server) => {
-        const taxValue = Number(config.taxPercent || 0);
-        const priceWithTax = Number(server?.price || 0) * (1 + taxValue / 100);
+        const basePrice = getBaseMonthlyPrice(server, includeIpPrice);
+        const priceWithTax =
+          basePrice * (1 + Number(config.taxPercent || 0) / 100);
         const priceOkWithTax = priceWithTax <= config.filters.maxPriceEur;
         return matchesFilters(server, config.filters) && priceOkWithTax;
       });
 
-      const postedIds = await loadPostedIds(postedIdsPath);
+      const postedState = await loadPostedState(postedStatePath);
       let newPosts = 0;
 
       for (const server of matches) {
         const serverId = String(server?.id ?? "");
-        if (!serverId || postedIds.has(serverId)) {
+        if (!serverId) {
           continue;
         }
 
-        const content = formatServerMessage(
+        const basePrice = getBaseMonthlyPrice(server, includeIpPrice);
+        const priceWithTaxValue = getPriceWithTaxValue(
+          basePrice,
+          config.taxPercent,
+        );
+        const lastState = postedState[serverId];
+        const lastPriceWithTax = lastState?.lastPriceWithTax ?? null;
+        const isPriceUpdate =
+          lastPriceWithTax !== null && priceWithTaxValue < lastPriceWithTax;
+        const isFirstPost = !lastState;
+
+        if (!isFirstPost && !isPriceUpdate) {
+          continue;
+        }
+
+        const embed = formatServerEmbed(
           server,
           previousSnapshot,
           config.taxPercent,
+          includeIpPrice,
+          isPriceUpdate,
         );
         const payload = {
           username: config.webhook?.username || "Hetzner Auction",
-          content,
+          embeds: [embed],
         };
 
         await postToDiscord(config.discordWebhookUrl, payload);
-        postedIds.add(serverId);
+        postedState[serverId] = {
+          lastPriceWithTax: priceWithTaxValue,
+          lastPostedAt: new Date().toISOString(),
+        };
         newPosts += 1;
       }
 
-      await savePostedIds(postedIdsPath, postedIds);
+      await savePostedState(postedStatePath, postedState);
 
       console.log(`Matches: ${matches.length}, New posts: ${newPosts}`);
     } catch (error) {

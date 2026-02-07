@@ -9,11 +9,14 @@
             "AMD"
         ],
         "maxPriceEur": 100,
-        "minNvmeTb": 3
+        "minNvmeTb": 3.5
     },
     "storage": {
-        "postedIdsFile": "posted_ids.json",
+        "postedStateFile": "posted_state.json",
         "historyDir": "history"
+    },
+    "pricing": {
+        "includeIpPrice": true
     },
     "polling": {
         "intervalMs": 5000
