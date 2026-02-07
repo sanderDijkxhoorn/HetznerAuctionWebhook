@@ -1,0 +1,24 @@
+{
+    "hetznerApiUrl": "https://www.hetzner.com/_resources/app/data/app/live_data_sb_USD.json",
+    "discordWebhookUrl": "https://discord.com/api/webhooks/xxxx/yyyy",
+    "taxPercent": 21,
+    "filters": {
+        "minRamGb": 128,
+        "requireEcc": true,
+        "cpuVendors": [
+            "AMD"
+        ],
+        "maxPriceEur": 100,
+        "minNvmeTb": 3
+    },
+    "storage": {
+        "postedIdsFile": "posted_ids.json",
+        "historyDir": "history"
+    },
+    "polling": {
+        "intervalMs": 5000
+    },
+    "webhook": {
+        "username": "Hetzner Auction"
+    }
+}
