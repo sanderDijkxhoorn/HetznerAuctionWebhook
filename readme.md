@@ -6,12 +6,18 @@ Monitors the Hetzner Server Auction feed, filters matches, posts to Discord, tra
 
 1. Clone the repo
 
-- git clone https://github.com/sanderDijkxhoorn/HetznerAuctionWebhook.git
-- cd HetznerAuctionWebhook
+```bash
+git clone https://github.com/sanderDijkxhoorn/HetznerAuctionWebhook.git
+```
+```bash
+cd HetznerAuctionWebhook
+```
 
 2. Create your config
 
-- cp config.json.example config.json
+```bash
+cp config.json.example config.json
+```
 
 3. Configure
 
@@ -26,11 +32,15 @@ Open [config.json](config.json) and set:
 
 4. Run
 
-- node index.js
+```bash
+node index.js
+```
 
 Or run with PM2:
 
-- pm2 start index.js --name HetznerAuctionWebhook
+```bash
+pm2 start index.js --name HetznerAuctionWebhook
+```
 
 ## Notes
 
