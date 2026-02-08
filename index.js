@@ -238,7 +238,7 @@ const formatServerEmbed = (
         previousServer,
         includeIpPrice,
       );
-      previousPriceLine = `**Previous Price:** ${formatPriceWithTax(previousBasePrice, taxPercent)}`;
+      previousPriceLine = formatPriceWithTax(previousBasePrice, taxPercent);
     }
   }
 
